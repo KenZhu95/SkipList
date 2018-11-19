@@ -1,187 +1,172 @@
-package FineGrained;
+package LockFree;
 
-import javax.management.MXBean;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicMarkableReference;
 
 public class SkipList implements Interface.SkipList {
-    public static final int MAX_LEVEL = 32;
+    public static final int MAX_LEVEL = 32 - 1;
     final Node head = new Node(Integer.MIN_VALUE);
     final Node tail = new Node(Integer.MAX_VALUE);
     public Random random;
 
     public SkipList() {
-        for (int i = 0; i < head.next.length; ++i) {
-            head.next[i] = tail;
+        for (int level = 0; level < head.next.length; ++level) {
+            head.next[level] = new AtomicMarkableReference<Node>(tail, false);
         }
         random = new Random();
     }
 
     public void clear() {
-        for (int i = 0; i < head.next.length; ++i) {
-            head.next[i] = tail;
+        for (int level = 0; level < head.next.length; ++level) {
+            head.next[level] = new AtomicMarkableReference<Node>(tail, false);
         }
         random = new Random();
     }
 
     private int randomLevel(int maxLevel) {
         int level = 0;
-        while (random.nextDouble() < 0.5) {
+        while (random.nextDouble() < 0.5 && level + 1 <= maxLevel) {
             level++;
         }
         return Math.min(level, maxLevel);
     }
 
-    private int findNode(int key, Node[] preds, Node[] succs) { //predecessors and successors
-        int lFound = -1;
-        Node pred = head;
-        for (int level = MAX_LEVEL - 1; level >= 0; level--) {
-            Node curr = pred.next[level];
-            while (key > curr.key) {
-                pred = curr;
-                curr = pred.next[level];
+    private boolean findNode(int key, Node[] preds, Node[] succs) {
+        int bottomLevel = 0;
+        boolean[] marked = {false};
+        boolean snip;
+        Node pred = null, curr = null, succ = null;
+        retry:
+        while (true) {
+            pred = head;
+            for (int level = MAX_LEVEL; level >= bottomLevel; level--) {
+                curr = pred.next[level].getReference();
+                while (true) {
+                    succ = curr.next[level].get(marked);
+                    while (marked[0]) {
+                        snip = pred.next[level].compareAndSet(curr, succ, false, false);
+
+                        if (!snip) continue retry;
+                        curr = pred.next[level].getReference();
+                        succ = curr.next[level].get(marked);
+                    }
+                    if (curr.key < key) {
+                        pred = curr;
+                        curr = succ;
+                    } else {
+                        break;
+                    }
+                }
+
+                preds[level] = pred;
+                succs[level] = curr;
             }
-            if (lFound == -1 && key == curr.key) {
-                lFound = level;
-            }
-            preds[level] = pred;
-            succs[level] = curr;
+            return (curr.key == key);
         }
-        return lFound;
     }
 
     public boolean add(int key) {
-        int topLevel = randomLevel(MAX_LEVEL - 1);
-        Node[] preds = new Node[MAX_LEVEL], succs = new Node[MAX_LEVEL];
+        int topLevel = randomLevel(MAX_LEVEL);
+        int bottomLevel = 0;
+        Node[] preds = new Node[MAX_LEVEL + 1];
+        Node[] succs = new Node[MAX_LEVEL + 1];
         while (true) {
-            int lFound = findNode(key, preds, succs);
-            if (lFound != -1) {
-                Node nodeFound = succs[lFound];
-                if (!nodeFound.marked) {
-                    while (!nodeFound.fullyLinked) {}
-                    return false;
-                }
-                continue;
-            }
-            int highestLocked = -1;
-            try {
-                Node pred, succ, prevPred = null;
-                boolean valid = true;
-                for (int level = 0; valid && (level <= topLevel); level++) {
-                    pred = preds[level];
-                    succ = succs[level];
-                    if (pred != prevPred) {
-                        pred.lock();
-                        highestLocked = level;
-                        prevPred = pred;
-                    }
-                    valid = !pred.marked && !succ.marked && pred.next[level]==succ;
-                }
-
-                if (!valid) continue;
+            boolean found = findNode(key, preds, succs);
+            if (found) {
+                return false;
+            } else {
                 Node newNode = new Node(key, topLevel);
-                for (int level = 0; level <= topLevel; level++) {
-                    newNode.next[level] = succs[level];
-                    preds[level].next[level] = newNode;
+                for (int level = bottomLevel; level <= topLevel; level++) {
+                    Node succ = succs[level];
+                    newNode.next[level].set(succ, false);
+                }
+                Node pred = preds[bottomLevel];
+                Node succ = succs[bottomLevel];
+                newNode.next[bottomLevel].set(succ, false);
+                if (!pred.next[bottomLevel].compareAndSet(succ, newNode, false, false)) {
+                    continue;
                 }
 
-                newNode.fullyLinked = true; // successfully add linearization point
-                return true;
-            } finally {
-                if (highestLocked != -1) {
-                    Node pred, prevPred = null;
-                    for (int level = highestLocked; level >= 0; level--) {
-                        pred = preds[level];
-                        if (pred != prevPred) {
-                            pred.unlock();
-                            prevPred = pred;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-
-    public boolean remove(int key) {
-        Node nodeToDelete = null;
-        boolean isMarked = false;
-        int topLevel = -1;
-        Node[] preds = new Node[MAX_LEVEL], succs = new Node[MAX_LEVEL];
-
-        while (true) {
-            int lFound = findNode(key, preds, succs);
-            if (isMarked || (lFound != -1 && okToDelete(succs[lFound], lFound))) {
-                if (!isMarked) {
-                    nodeToDelete = succs[lFound];
-                    topLevel = nodeToDelete.topLevel;
-                    nodeToDelete.lock();
-                    if (nodeToDelete.marked) {
-                        nodeToDelete.unlock();
-                        return false;
-                    }
-                    nodeToDelete.marked = true;
-                    isMarked = true;
-                }
-                int highestLocked = -1;
-                try {
-                    Node pred, succ, prevPred = null;
-                    boolean valid = true;
-                    for (int level = 0; valid && (level <= topLevel); level++) {
+                for (int level = bottomLevel + 1; level <= topLevel; level++) {
+                    while (true) {
                         pred = preds[level];
                         succ = succs[level];
-                        if (pred != prevPred) {
-                            pred.lock();
-                            highestLocked = level;
-                            prevPred = pred;
+                        if (pred.next[level].compareAndSet(succ, newNode, false, false)) {
+                            break;
                         }
-                        valid = !pred.marked && pred.next[level] == succ;
+                        findNode(key, preds, succs);
                     }
-                    if (!valid) continue;
+                }
+                return true;
+            }
+        }
+    }
 
-                    for (int level = topLevel; level >= 0; level--) {
-                        preds[level].next[level] = nodeToDelete.next[level];
+    public boolean remove(int key) {
+        int bottomLevel = 0;
+        Node[] preds = new Node[MAX_LEVEL + 1];
+        Node[] succs = new Node[MAX_LEVEL + 1];
+        Node succ;
+        while (true) {
+            boolean found = findNode(key, preds, succs);
+            if (!found) {
+                return false;
+            } else {
+                Node nodeToRemove = succs[bottomLevel];
+                for (int level = nodeToRemove.topLevel; level >= bottomLevel + 1; level--) {
+                    boolean[] marked = {false};
+                    succ = nodeToRemove.next[level].get(marked);
+                    while (!marked[0]) {
+                        nodeToRemove.next[level].attemptMark(succ, true);
+                        succ = nodeToRemove.next[level].get(marked);
                     }
-                    nodeToDelete.unlock();
-                    return true;
-                } finally {
-                    if (highestLocked != -1) {
-                        Node pred, prevPred = null;
-                        for (int level = highestLocked; level >= 0; level--) {
-                            pred = preds[level];
-                            if (pred != prevPred) {
-                                pred.unlock();
-                                prevPred = pred;
-                            }
-                        }
+                }
+
+                boolean[] marked = {false};
+                succ = nodeToRemove.next[bottomLevel].get(marked);
+                while (true) {
+                    boolean iMarkedIt = nodeToRemove.next[bottomLevel].compareAndSet(succ, succ, false, true);
+                    succ = succs[bottomLevel].next[bottomLevel].get(marked);
+                    if (iMarkedIt) {
+                        findNode(key, preds, succs);
+                        return true;
+                    } else {
+                        if (marked[0]) return false;
                     }
                 }
             }
-            else return false;
-
         }
-
     }
-
-
-    private boolean okToDelete(Node candidate, int lFound) {
-        return (candidate.fullyLinked && candidate.topLevel==lFound && !candidate.marked);
-    }
-
 
     public boolean contains(int key) {
-        Node[] preds = new Node[MAX_LEVEL], succs = new Node[MAX_LEVEL];
-        int lFound = findNode(key, preds, succs);
-        return (lFound != -1 && succs[lFound].fullyLinked && !succs[lFound].marked);
+        int bottomLevel = 0;
+        boolean[] marked = {false};
+        Node pred = head, curr = null, succ = null;
+        for (int level = MAX_LEVEL; level >= bottomLevel; level--) {
+            curr = pred.next[level].getReference();
+            while (true) {
+                succ = curr.next[level].get(marked);
+                while (marked[0]) {
+                	pred = curr;
+                    curr = pred.next[level].getReference();
+                    succ = curr.next[level].get(marked);
+                }
+                if (curr.key < key) {
+                    pred = curr;
+                    curr = succ;
+                } else {
+                    break;
+                }
+            }
+        }
+        return (curr.key == key);
     }
-
 
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        Node curr = head.next[0];
-        while (curr != tail) {
-            System.out.println(curr.key);
-            sb.append(curr.key + ",");
-            curr = curr.next[0];
+        for (Node node = head.next[0].getReference(); node != tail; node = node.next[0].getReference()) {
+            sb.append(node.key);
+            sb.append(",");
         }
         return sb.toString();
     }
