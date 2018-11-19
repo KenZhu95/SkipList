@@ -11,14 +11,14 @@ public class SkipList implements Interface.SkipList {
 
     public SkipList() {
         for (int level = 0; level < head.next.length; ++level) {
-            head.next[level] = new AtomicMarkableReference<>(tail, false);
+            head.next[level] = new AtomicMarkableReference<Node>(tail, false);
         }
         random = new Random();
     }
 
     public void clear() {
         for (int level = 0; level < head.next.length; ++level) {
-            head.next[level] = new AtomicMarkableReference<>(tail, false);
+            head.next[level] = new AtomicMarkableReference<Node>(tail, false);
         }
         random = new Random();
     }
@@ -147,6 +147,7 @@ public class SkipList implements Interface.SkipList {
             while (true) {
                 succ = curr.next[level].get(marked);
                 while (marked[0]) {
+                	pred = curr;
                     curr = pred.next[level].getReference();
                     succ = curr.next[level].get(marked);
                 }
