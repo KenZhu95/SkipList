@@ -6,7 +6,7 @@ import java.util.*;
 
 public class SkipListTestBench {
 
-    static class Context {
+    static class Context {	//# of threads, times, range
         int numThreads;
         int times;
         int range;
@@ -22,16 +22,16 @@ public class SkipListTestBench {
 
     static void setupContexts() {
         contexts = new ArrayList<>();
-        contexts.add(new Context(2, 5, 200));
-        contexts.add(new Context(4, 5, 200));
-        contexts.add(new Context(8, 5, 200));
-        contexts.add(new Context(16, 5, 200));
-        contexts.add(new Context(32, 5, 200));
+        contexts.add(new Context(2, 5, 20000));
+        contexts.add(new Context(4, 5, 20000));
+        contexts.add(new Context(8, 5, 20000));
+        contexts.add(new Context(16, 5, 20000));
+        contexts.add(new Context(32, 5, 20000));
+
     }
 
     static HashMap<String, SkipList> createSkipLists() {
         HashMap<String, SkipList> skipList = new HashMap<>();
-
         skipList.put("coarseGrained", new CoarseGrained.SkipList());
         skipList.put("fineGrained", new FineGrained.SkipList());
         skipList.put("lockFree", new LockFree.SkipList());
@@ -42,27 +42,28 @@ public class SkipListTestBench {
     public static void main(String args[]) {
         setupContexts();
         runAllTests();
-
     }
 
     static void runAllTests() {
-        double[][] probs = {{1.0, 0.0}, {0.9, 0.09}, {0.7, 0.2}, {0.0, 0.5}};
-        for (int i = 2; i < 3; i++) {
+    				//		  All A		
+        double[][] probs = {{0.9, 0.09}, {0.7, 0.2}, {0.0, 0.5}};
+        for (int i = 0; i < 3; i++) {
             double[] prob = probs[i];
+            System.out.println(prob[0]+" C, "+(prob[1])+"A, "+(1-prob[1]-prob[0])+"R");
             for (Context context : contexts) {
-                System.out.println(context.numThreads);
-                Test test = new Test(1024, context.numThreads, context.times, context.range, prob[0], prob[1]);
+                System.out.println("Number of Threads: " + context.numThreads);
+                Test test = new Test(10000, context.numThreads, context.times, context.range, prob[0], prob[1]);
                 HashMap<String, Double> map = test.runTestAll();
                 for (Map.Entry<String, Double> entry : map.entrySet()) {
-
-                    System.out.println(entry.getKey());
-                    System.out.println(entry.getValue());
+                    System.out.print(entry.getKey() + "\t"+entry.getValue()+ "\t");
                 }
+                System.out.println();
             }
+            System.out.println();
         }
     }
 
-    static class RandomValue {
+    static class RandomValue {		//Generate Random Value within Given Range for Key
         private final Random random;
         private final int range;
 
@@ -96,9 +97,8 @@ public class SkipListTestBench {
         @Override
         public void run() {
             for (int index = 0; index < numOperations; ++index) {
-                System.out.print(index);
+                //System.out.print(index);
                 int key = this.randomValue.nextValue();
-
 
                 switch (this.weightedOperation.nextOperation()) {
                     case Contains:
@@ -120,7 +120,7 @@ public class SkipListTestBench {
         int numThreads;
         int times;
         int range;
-        double containsP;
+        double containsP;	//Potential of Contain Operation
         double addP;
 
         public Test(int numOp, int numTh, int times, int range, double pC, double pA) {
@@ -134,15 +134,14 @@ public class SkipListTestBench {
 
         long runTestOnce(SkipList skipList) {
             List<Thread> threads = new ArrayList<>();
-
+            //Generate threads
             for (int i = 0; i < this.numThreads; ++i) {
                 Random random = new Random();
                 RandomValue randomValue = new RandomValue(random, range);
-
                 Thread thread = new Thread(new Runner(skipList, numOperations, randomValue, containsP, addP));
                 threads.add(thread);
             }
-
+            //Start Time
             long start = System.nanoTime();
             for (Thread t : threads) {
                 t.start();
@@ -154,6 +153,7 @@ public class SkipListTestBench {
                     e.printStackTrace();
                 }
             }
+            //Return Running Time
             return System.nanoTime() - start;
         }
 
@@ -180,7 +180,7 @@ public class SkipListTestBench {
                     skipList.clear();
                 }
                 double averageRunTime = average(runTime);
-                result.put(name + this.containsP, averageRunTime);
+                result.put(name+" ", averageRunTime);
             }
             return result;
         }
@@ -194,7 +194,7 @@ enum Operation {
     Contains
 }
 
-class WeightedOperation {
+class WeightedOperation {	//Randomly Generate Next Operation
     double containsP;
     double addP;
 
